@@ -1,0 +1,58 @@
+version: "3.7"
+
+# AuraLog — two-container stack
+#
+#  web   — nginx serving the React SPA (port 3850, public)
+#  proxy — Express API proxy (port 3851, internal only — NOT exposed to host)
+#
+# The Anthropic API key lives only in proxy's environment.
+# The browser can only reach /api/* via nginx → proxy on the internal network.
+
+services:
+
+  proxy:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: auralog-proxy
+    restart: unless-stopped
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - PORT=3851
+      - NODE_ENV=production
+    # NOT exposed to host — only reachable from web container via internal network
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3851/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: auralog
+    restart: unless-stopped
+    ports:
+      - "${APP_AURALOG_PORT:-3850}:80"
+    depends_on:
+      proxy:
+        condition: service_healthy
+    networks:
+      - internal
+      - umbrel_main_network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  # Internal bridge — proxy is unreachable from outside this compose stack
+  internal:
+    driver: bridge
+    internal: true
+  umbrel_main_network:
+    external: true

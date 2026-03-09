@@ -1,0 +1,79 @@
+manifestVersion: 1
+id: auralog
+name: AuraLog
+tagline: AI-powered private journal with Claude, mood tracking & pattern analytics
+category: productivity
+version: "1.0.0"
+port: 3850
+description: >-
+  AuraLog is a privacy-first journaling app that combines local-first data storage
+  with the intelligence of Claude AI — giving you insights your generic journal app
+  never could.
+
+
+  **What makes AuraLog different:**
+
+
+  🧠 **Real AI, not fake AI** — Claude analyzes your actual entries to surface
+  non-obvious patterns, emotional trajectories, and behavioral blindspots.
+  Not keyword matching. Not sentiment scores. Genuine synthesis.
+
+
+  📓 **Weekly Digest** — Every week, get an AI-generated narrative summary of your
+  entries: highlights, emotional patterns, growth observations, and a specific
+  intention for the following week.
+
+
+  💬 **Conversational Journal Search** — Ask questions like "when did I last feel
+  really good about my work?" or "what do I write about when I'm anxious?" and
+  get semantically relevant results across all your entries.
+
+
+  ⚡ **Smart Prompts** — AI generates writing prompts tailored to your current mood,
+  chosen journey, and recent entry history. Not generic. Contextual.
+
+
+  📊 **Deep Analytics** — Mood trends, energy tracking, best days of the week,
+  journey breakdown, recurring themes, and streak tracking.
+
+
+  🔒 **Complete Privacy** — All data stored in your browser's localStorage.
+  Nothing leaves your Umbrel node. Optional XOR encryption adds a password layer.
+  Export anytime as JSON.
+
+
+  **Journey Categories:** Personal, Work, Reading, Creative, Learning, Health
+
+
+  **Features:**
+  - Mood (1-5) + Energy (1-5) tracking per entry
+  - 6 journey categories with color-coded organization  
+  - AI reflection panel on every entry
+  - Conversational "Ask AI" interface per entry
+  - Semantic + full-text search
+  - Weekly AI digest
+  - Analytics: mood trends, day-of-week patterns, word clouds, emotion radar
+  - XOR encryption at rest
+  - JSON export/import
+  - Dark / Light / OLED themes
+  - Day streak tracking
+
+
+  **Requirements:** You need an Anthropic API key to use AI features.
+  All analytics and basic journaling work without it.
+
+developer: AuraLog
+website: https://github.com/nillawafa/auralog
+repo: https://github.com/nillawafa/auralog
+support: https://github.com/nillawafa/auralog/issues
+gallery:
+  - 1.png
+  - 2.png
+  - 3.png
+releaseNotes: >-
+  Initial release. Full journaling with Claude AI integration, mood/energy
+  tracking, weekly digest, semantic search, and comprehensive analytics.
+dependencies: []
+path: ""
+defaultUsername: ""
+defaultPassword: ""
