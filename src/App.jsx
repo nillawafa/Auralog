@@ -13,10 +13,7 @@ import {
   AlertCircle, CheckCircle, Clock, Archive, Layers, Activity
 } from 'lucide-react';
 
-// ─── Constants ───────────────────────────────────────────────────────────────
-
-// NOTE: Model selection is server-side only (server/index.js)
-// The client never specifies a model, preventing model-injection attacks.
+// ─── Constants ────────────────────────────────────────────────────────────────
 
 const MOODS = [
   { value: 1, emoji: '😫', label: 'Terrible', color: '#dc2626', bg: 'rgba(220,38,38,0.15)' },
@@ -44,17 +41,8 @@ const ENERGY_LEVELS = [
 ];
 
 // ─── Crypto Utilities (AES-256-GCM via Web Crypto API) ───────────────────────
-//
-// Uses the browser's native SubtleCrypto — no JS crypto libraries, no
-// dependencies, auditable by anyone who can read MDN docs.
-//
-// Format stored in localStorage:
-//   base64( salt[16] || iv[12] || ciphertext )
-//
-// Key derivation: PBKDF2-SHA-256, 310,000 iterations (OWASP 2024 recommendation)
 
 const PBKDF2_ITERATIONS = 310_000;
-
 const buf2b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
 const b642buf = (b64) => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
 
@@ -79,18 +67,15 @@ const aesEncrypt = async (data, password) => {
   const key  = await deriveKey(password, salt);
   const enc  = new TextEncoder();
   const ct   = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify(data)));
-  // Concatenate salt + iv + ciphertext
-  const out = new Uint8Array(salt.length + iv.length + ct.byteLength);
-  out.set(salt, 0);
-  out.set(iv, 16);
-  out.set(new Uint8Array(ct), 28);
+  const out  = new Uint8Array(salt.length + iv.length + ct.byteLength);
+  out.set(salt, 0); out.set(iv, 16); out.set(new Uint8Array(ct), 28);
   return buf2b64(out.buffer);
 };
 
 const aesDecrypt = async (b64, password) => {
   if (!password) { try { return JSON.parse(b64); } catch { return null; } }
   try {
-    const buf  = b642buf(b64);
+    const buf = b642buf(b64);
     const salt = buf.slice(0, 16);
     const iv   = buf.slice(16, 28);
     const ct   = buf.slice(28);
@@ -100,7 +85,7 @@ const aesDecrypt = async (b64, password) => {
   } catch { return null; }
 };
 
-// ─── Claude API — routed through local proxy, key never touches browser ───────
+// ─── Claude API — routed through local proxy ──────────────────────────────────
 
 const callClaude = async (systemPrompt, userMessage, maxTokens = 800) => {
   const res = await fetch('/api/claude', {
@@ -112,7 +97,6 @@ const callClaude = async (systemPrompt, userMessage, maxTokens = 800) => {
       max_tokens: maxTokens,
     }),
   });
-
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     if (res.status === 503 && err.code === 'NO_API_KEY') {
@@ -121,7 +105,6 @@ const callClaude = async (systemPrompt, userMessage, maxTokens = 800) => {
     if (res.status === 429) throw new Error('Rate limit hit. Wait a moment and try again.');
     throw new Error(err.error || `Proxy error: ${res.status}`);
   }
-
   const data = await res.json();
   return data.content?.[0]?.text || '';
 };
@@ -148,16 +131,48 @@ const extractKeywords = (text) => {
 };
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
+// Settings (theme, encryption prefs) stay in localStorage — not sensitive.
+// Journal entries are persisted server-side at /data/entries.json on the Umbrel device.
 
-const STORAGE_KEY = 'auralog_v2_entries';
 const SETTINGS_KEY = 'auralog_v2_settings';
 
 const loadSettings = () => {
   try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); }
   catch { return {}; }
 };
-
 const saveSettings = (s) => localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+
+// API storage helpers
+const apiLoadEntries = async () => {
+  try {
+    const res = await fetch('/api/entries');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.warn('[storage] apiLoadEntries failed, falling back to localStorage:', err.message);
+    try { return JSON.parse(localStorage.getItem('auralog_v2_entries') || '[]'); }
+    catch { return []; }
+  }
+};
+
+// Debounced save — avoids hammering the server on every keystroke
+let _saveTimer = null;
+const apiSaveEntries = (entries) => {
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(async () => {
+    try {
+      const res = await fetch('/api/entries', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(entries),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      console.warn('[storage] apiSaveEntries failed, falling back to localStorage:', err.message);
+      localStorage.setItem('auralog_v2_entries', JSON.stringify(entries));
+    }
+  }, 800);
+};
 
 // ─── Components ───────────────────────────────────────────────────────────────
 
@@ -190,10 +205,10 @@ const Card = ({ children, style = {}, onClick }) => (
 const Button = ({ children, onClick, variant = 'primary', size = 'md', loading, disabled, style = {}, icon }) => {
   const sizes = { sm: '8px 14px', md: '10px 20px', lg: '13px 28px' };
   const variants = {
-    primary: { background: 'var(--accent)', color: '#fff', border: 'none' },
+    primary:   { background: 'var(--accent)', color: '#fff', border: 'none' },
     secondary: { background: 'var(--card)', color: 'var(--text)', border: '1px solid var(--border)' },
-    ghost: { background: 'transparent', color: 'var(--text-muted)', border: '1px solid transparent' },
-    danger: { background: 'rgba(220,38,38,0.1)', color: '#f87171', border: '1px solid rgba(220,38,38,0.3)' },
+    ghost:     { background: 'transparent', color: 'var(--text-muted)', border: '1px solid transparent' },
+    danger:    { background: 'rgba(220,38,38,0.1)', color: '#f87171', border: '1px solid rgba(220,38,38,0.3)' },
   };
   return (
     <button onClick={onClick} disabled={disabled || loading} style={{
@@ -209,7 +224,7 @@ const Button = ({ children, onClick, variant = 'primary', size = 'md', loading, 
   );
 };
 
-const Input = ({ value, onChange, placeholder, type = 'text', multiline, rows = 5, style = {} }) => {
+const Input = ({ value, onChange, placeholder, type = 'text', multiline, rows = 5, style = {}, onKeyPress }) => {
   const base = {
     width: '100%', padding: '12px 16px',
     background: 'var(--input)', border: '1px solid var(--border)',
@@ -218,8 +233,8 @@ const Input = ({ value, onChange, placeholder, type = 'text', multiline, rows = 
     lineHeight: 1.6, boxSizing: 'border-box', ...style
   };
   return multiline
-    ? <textarea value={value} onChange={onChange} placeholder={placeholder} rows={rows} style={base} />
-    : <input type={type} value={value} onChange={onChange} placeholder={placeholder} style={base} />;
+    ? <textarea value={value} onChange={onChange} placeholder={placeholder} rows={rows} style={base} onKeyPress={onKeyPress} />
+    : <input type={type} value={value} onChange={onChange} placeholder={placeholder} style={base} onKeyPress={onKeyPress} />;
 };
 
 // ─── AI Panel ─────────────────────────────────────────────────────────────────
@@ -256,7 +271,7 @@ Format as JSON: { "pattern": "...", "insight": "...", "action": "...", "question
       const clean = result.replace(/```json\n?|\n?```/g, '').trim();
       setInsights(JSON.parse(clean));
     } catch (e) {
-      setInsights({ error: 'Could not generate insights. Check your API key.' });
+      setInsights({ error: e.message || 'Could not generate insights.' });
     }
     setLoading(false);
   }, [entry, entries]);
@@ -273,29 +288,25 @@ Format as JSON: { "pattern": "...", "insight": "...", "action": "...", "question
         `[${new Date(e.date).toLocaleDateString()} | ${e.journey}] ${e.title}: ${e.content.slice(0, 150)}`
       ).join('\n');
 
-      const history = [...chatHistory, { role: 'user', content: userMsg }];
-      const messages = [
-        { role: 'user', content: `Journal context:\n${context}\n\nConversation: ${userMsg}` }
-      ];
-
       const reply = await callClaude(
         `You are a thoughtful journal companion with access to the user's journal history.
 Answer questions about their patterns, growth, and experiences with specificity.
 Be direct, insightful, and occasionally challenging. Max 3 sentences per response.`,
-        messages[0].content,
+        `Journal context:\n${context}\n\nQuestion: ${userMsg}`,
         400
       );
 
       setChatHistory(h => [...h, { role: 'assistant', content: reply }]);
-    } catch { setChatHistory(h => [...h, { role: 'assistant', content: 'Error reaching Claude API.' }]); }
+    } catch (e) {
+      setChatHistory(h => [...h, { role: 'assistant', content: e.message || 'Error reaching API.' }]);
+    }
     setChatLoading(false);
-
     setTimeout(() => chatRef.current?.scrollTo({ top: 9999, behavior: 'smooth' }), 100);
   }, [chatInput, chatHistory, entries]);
 
   const tabs = [
     { id: 'reflect', label: 'Reflect', icon: Sparkles },
-    { id: 'chat', label: 'Ask AI', icon: MessageCircle },
+    { id: 'chat',    label: 'Ask AI',  icon: MessageCircle },
   ];
 
   return (
@@ -336,9 +347,9 @@ Be direct, insightful, and occasionally challenging. Max 3 sentences per respons
           {insights && !insights.error && (
             <div style={{ display: 'grid', gap: 14 }}>
               {[
-                { key: 'pattern', label: '📊 Pattern', color: '#0284c7' },
-                { key: 'insight', label: '💡 Insight', color: '#7c3aed' },
-                { key: 'action', label: '⚡ Next 24h', color: '#059669' },
+                { key: 'pattern',  label: '📊 Pattern',    color: '#0284c7' },
+                { key: 'insight',  label: '💡 Insight',    color: '#7c3aed' },
+                { key: 'action',   label: '⚡ Next 24h',   color: '#059669' },
                 { key: 'question', label: '🤔 Reflect on', color: '#d97706' },
               ].map(({ key, label, color }) => insights[key] && (
                 <div key={key} style={{
@@ -367,8 +378,7 @@ Be direct, insightful, and occasionally challenging. Max 3 sentences per respons
         <div>
           <div ref={chatRef} style={{
             height: 200, overflowY: 'auto', display: 'flex',
-            flexDirection: 'column', gap: 10, marginBottom: 12,
-            padding: '4px 0'
+            flexDirection: 'column', gap: 10, marginBottom: 12, padding: '4px 0'
           }}>
             {chatHistory.length === 0 && (
               <p style={{ color: 'var(--text-muted)', fontSize: 13, textAlign: 'center', paddingTop: 60 }}>
@@ -385,7 +395,7 @@ Be direct, insightful, and occasionally challenging. Max 3 sentences per respons
               }}>{m.content}</div>
             ))}
             {chatLoading && (
-              <div style={{ alignSelf: 'flex-start', color: 'var(--text-muted)', fontSize: 13, paddingLeft: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div style={{ alignSelf: 'flex-start', color: 'var(--text-muted)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
                 <Spinner size={14} /> Thinking...
               </div>
             )}
@@ -406,7 +416,7 @@ Be direct, insightful, and occasionally challenging. Max 3 sentences per respons
   );
 };
 
-// ─── Weekly Digest ─────────────────────────────────────────────────────────────
+// ─── Weekly Digest ────────────────────────────────────────────────────────────
 
 const WeeklyDigest = ({ entries }) => {
   const [digest, setDigest] = useState(null);
@@ -440,7 +450,7 @@ Be specific. Reference actual events and dates. Be an honest mirror, not a cheer
       const clean = result.replace(/```json\n?|\n?```/g, '').trim();
       setDigest(JSON.parse(clean));
     } catch (e) {
-      setDigest({ error: 'Could not generate digest.' });
+      setDigest({ error: e.message || 'Could not generate digest.' });
     }
     setLoading(false);
   };
@@ -473,13 +483,11 @@ Be specific. Reference actual events and dates. Be an honest mirror, not a cheer
           Get an AI-synthesized view of your week — patterns, highlights, and what to focus on next.
         </p>
       )}
-
       {loading && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--text-muted)', padding: '10px 0' }}>
           <Spinner /> Synthesizing your week...
         </div>
       )}
-
       {digest && !digest.error && (
         <div style={{ display: 'grid', gap: 16 }}>
           <div style={{ padding: '14px 16px', background: 'var(--card-alt)', borderRadius: 10, fontSize: 15, lineHeight: 1.7 }}>
@@ -487,26 +495,20 @@ Be specific. Reference actual events and dates. Be an honest mirror, not a cheer
           </div>
           {digest.highlights && (
             <div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
-                Highlights
-              </div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Highlights</div>
               {digest.highlights.map((h, i) => (
                 <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginBottom: 8, fontSize: 14 }}>
-                  <Star size={14} style={{ color: '#d97706', flexShrink: 0, marginTop: 2 }} />
-                  {h}
+                  <Star size={14} style={{ color: '#d97706', flexShrink: 0, marginTop: 2 }} />{h}
                 </div>
               ))}
             </div>
           )}
           {digest.patterns && (
             <div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
-                Patterns
-              </div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Patterns</div>
               {digest.patterns.map((p, i) => (
                 <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginBottom: 8, fontSize: 14 }}>
-                  <TrendingUp size={14} style={{ color: '#7c3aed', flexShrink: 0, marginTop: 2 }} />
-                  {p}
+                  <TrendingUp size={14} style={{ color: '#7c3aed', flexShrink: 0, marginTop: 2 }} />{p}
                 </div>
               ))}
             </div>
@@ -523,7 +525,6 @@ Be specific. Reference actual events and dates. Be an honest mirror, not a cheer
           )}
         </div>
       )}
-
       {digest?.error && (
         <div style={{ color: '#f87171', fontSize: 14, display: 'flex', gap: 8, alignItems: 'center' }}>
           <AlertCircle size={16} /> {digest.error}
@@ -533,7 +534,7 @@ Be specific. Reference actual events and dates. Be an honest mirror, not a cheer
   );
 };
 
-// ─── Smart Prompt Generator ────────────────────────────────────────────────────
+// ─── Smart Prompt Generator ───────────────────────────────────────────────────
 
 const SmartPromptGenerator = ({ entries, mood, journey, onSelect }) => {
   const [prompts, setPrompts] = useState([]);
@@ -546,7 +547,7 @@ const SmartPromptGenerator = ({ entries, mood, journey, onSelect }) => {
         `[${e.journey}] ${e.title}: ${e.content.slice(0, 120)}`
       ).join('\n');
 
-      const moodLabel = MOODS.find(m => m.value === mood)?.label || 'Neutral';
+      const moodLabel    = MOODS.find(m => m.value === mood)?.label || 'Neutral';
       const journeyLabel = JOURNEYS.find(j => j.id === journey)?.label || 'Personal';
 
       const result = await callClaude(
@@ -582,7 +583,6 @@ Format as JSON array: ["prompt1", "prompt2", "prompt3"]`,
           AI Generate
         </Button>
       </div>
-
       {prompts.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {prompts.map((p, i) => (
@@ -597,7 +597,6 @@ Format as JSON array: ["prompt1", "prompt2", "prompt3"]`,
           ))}
         </div>
       )}
-
       {prompts.length === 0 && !loading && (
         <p style={{ fontSize: 13, color: 'var(--text-muted)', fontStyle: 'italic' }}>
           Click AI Generate for prompts tailored to your mood and history.
@@ -616,10 +615,10 @@ const Analytics = ({ entries }) => {
   const stats = useMemo(() => {
     if (!entries.length) return null;
 
-    const avgMood = entries.reduce((s, e) => s + e.mood, 0) / entries.length;
+    const avgMood  = entries.reduce((s, e) => s + e.mood, 0) / entries.length;
     const moodTrend = entries.slice(0, 14).reverse().map(e => ({
-      date: new Date(e.date).toLocaleDateString('en', { month: 'short', day: 'numeric' }),
-      mood: e.mood,
+      date:   new Date(e.date).toLocaleDateString('en', { month: 'short', day: 'numeric' }),
+      mood:   e.mood,
       energy: e.energy || null,
     }));
 
@@ -627,45 +626,24 @@ const Analytics = ({ entries }) => {
       name: j.label, value: entries.filter(e => e.journey === j.id).length, color: j.color
     })).filter(j => j.value > 0);
 
-    const moodDist = MOODS.map(m => ({
-      name: m.label, value: entries.filter(e => e.mood === m.value).length, color: m.color
-    }));
-
     const dayOfWeek = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(day => {
-      const dayEntries = entries.filter(e => new Date(e.date).toLocaleDateString('en',{weekday:'short'}) === day);
-      return { day, avg: dayEntries.length ? (dayEntries.reduce((s,e)=>s+e.mood,0)/dayEntries.length).toFixed(1) : null, count: dayEntries.length };
+      const de = entries.filter(e => new Date(e.date).toLocaleDateString('en',{weekday:'short'}) === day);
+      return { day, avg: de.length ? (de.reduce((s,e)=>s+e.mood,0)/de.length).toFixed(1) : null, count: de.length };
     }).filter(d => d.count > 0);
 
     const keywords = extractKeywords(entries.map(e => e.content + ' ' + e.title).join(' '));
 
     const streak = (() => {
-      let s = 0, d = new Date();
-      d.setHours(0,0,0,0);
+      let s = 0, d = new Date(); d.setHours(0,0,0,0);
       while (true) {
-        const hasEntry = entries.some(e => {
-          const ed = new Date(e.date); ed.setHours(0,0,0,0);
-          return ed.getTime() === d.getTime();
-        });
-        if (!hasEntry) break;
+        const has = entries.some(e => { const ed = new Date(e.date); ed.setHours(0,0,0,0); return ed.getTime() === d.getTime(); });
+        if (!has) break;
         s++; d.setDate(d.getDate() - 1);
       }
       return s;
     })();
 
-    const monthlyTrend = (() => {
-      const byMonth = {};
-      entries.forEach(e => {
-        const k = new Date(e.date).toLocaleDateString('en', { month: 'short', year: '2-digit' });
-        if (!byMonth[k]) byMonth[k] = { sum: 0, count: 0 };
-        byMonth[k].sum += e.mood;
-        byMonth[k].count++;
-      });
-      return Object.entries(byMonth).map(([month, d]) => ({
-        month, avg: (d.sum / d.count).toFixed(2), count: d.count
-      })).slice(-6);
-    })();
-
-    return { avgMood: avgMood.toFixed(1), moodTrend, journeyDist, moodDist, dayOfWeek, keywords, streak, monthlyTrend };
+    return { avgMood: avgMood.toFixed(1), moodTrend, journeyDist, dayOfWeek, keywords, streak };
   }, [entries]);
 
   const generateAISummary = async () => {
@@ -690,8 +668,8 @@ Be honest and specific. Avoid vague platitudes.`,
 
       const clean = result.replace(/```json\n?|\n?```/g, '').trim();
       setAiSummary(JSON.parse(clean));
-    } catch {
-      setAiSummary({ error: 'Could not generate AI analysis.' });
+    } catch (e) {
+      setAiSummary({ error: e.message || 'Could not generate AI analysis.' });
     }
     setAiLoading(false);
   };
@@ -703,22 +681,17 @@ Be honest and specific. Avoid vague platitudes.`,
     </div>
   );
 
-  const TOOLTIP_STYLE = {
-    contentStyle: {
-      background: 'var(--bg)', border: '1px solid var(--border)',
-      borderRadius: 10, fontSize: 13, fontFamily: 'inherit'
-    }
-  };
+  const TS = { contentStyle: { background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 10, fontSize: 13, fontFamily: 'inherit' } };
 
   return (
     <div style={{ display: 'grid', gap: 24 }}>
       {/* KPIs */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 16 }}>
         {[
-          { label: 'Entries', value: entries.length, icon: BookOpen, color: '#7c3aed' },
-          { label: 'Avg Mood', value: `${stats.avgMood}/5`, icon: TrendingUp, color: '#0284c7' },
-          { label: 'Day Streak', value: stats.streak, icon: Flame, color: '#d97706' },
-          { label: 'Journeys', value: stats.journeyDist.length, icon: Layers, color: '#059669' },
+          { label: 'Entries',   value: entries.length,         icon: BookOpen,  color: '#7c3aed' },
+          { label: 'Avg Mood',  value: `${stats.avgMood}/5`,   icon: TrendingUp, color: '#0284c7' },
+          { label: 'Day Streak',value: stats.streak,           icon: Flame,     color: '#d97706' },
+          { label: 'Journeys',  value: stats.journeyDist.length,icon: Layers,   color: '#059669' },
         ].map(k => (
           <Card key={k.label} style={{ textAlign: 'center' }}>
             <k.icon size={20} style={{ color: k.color, marginBottom: 8 }} />
@@ -738,7 +711,6 @@ Be honest and specific. Avoid vague platitudes.`,
             {aiSummary ? 'Refresh' : 'Analyze All'}
           </Button>
         </div>
-
         {!aiSummary && !aiLoading && (
           <p style={{ fontSize: 14, color: 'var(--text-muted)' }}>
             Deep analysis of all your entries — emotional trajectory, patterns, blindspots, and personalized recommendations.
@@ -765,6 +737,7 @@ Be honest and specific. Avoid vague platitudes.`,
             )}
           </div>
         )}
+        {aiSummary?.error && <div style={{ color: '#f87171', fontSize: 14, display: 'flex', gap: 8, alignItems: 'center' }}><AlertCircle size={16} />{aiSummary.error}</div>}
       </Card>
 
       {/* Mood trend */}
@@ -774,24 +747,20 @@ Be honest and specific. Avoid vague platitudes.`,
           <AreaChart data={stats.moodTrend}>
             <defs>
               <linearGradient id="moodGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#7c3aed" stopOpacity={0.3} />
+                <stop offset="5%"  stopColor="#7c3aed" stopOpacity={0.3} />
                 <stop offset="95%" stopColor="#7c3aed" stopOpacity={0} />
               </linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
             <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} />
             <YAxis domain={[1, 5]} ticks={[1,2,3,4,5]} tick={{ fontSize: 11, fill: 'var(--text-muted)' }} />
-            <Tooltip {...TOOLTIP_STYLE} />
+            <Tooltip {...TS} />
             <Area type="monotone" dataKey="mood" stroke="#7c3aed" strokeWidth={2.5} fill="url(#moodGrad)" dot={{ fill: '#7c3aed', r: 4 }} />
-            {stats.moodTrend.some(d => d.energy) && (
-              <Line type="monotone" dataKey="energy" stroke="#d97706" strokeWidth={1.5} strokeDasharray="4 4" dot={false} />
-            )}
           </AreaChart>
         </ResponsiveContainer>
       </Card>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 24 }}>
-        {/* Journey dist */}
         <Card>
           <h3 style={{ margin: '0 0 20px', fontSize: 17, fontWeight: 700 }}>Journey Breakdown</h3>
           <ResponsiveContainer width="100%" height={200}>
@@ -799,16 +768,14 @@ Be honest and specific. Avoid vague platitudes.`,
               <Pie data={stats.journeyDist} cx="50%" cy="50%" innerRadius={50} outerRadius={80}
                 dataKey="value" paddingAngle={4}
                 label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                labelLine={false}
-              >
+                labelLine={false}>
                 {stats.journeyDist.map((e, i) => <Cell key={i} fill={e.color} />)}
               </Pie>
-              <Tooltip {...TOOLTIP_STYLE} />
+              <Tooltip {...TS} />
             </PieChart>
           </ResponsiveContainer>
         </Card>
 
-        {/* Day of week */}
         <Card>
           <h3 style={{ margin: '0 0 20px', fontSize: 17, fontWeight: 700 }}>Best Days</h3>
           <ResponsiveContainer width="100%" height={200}>
@@ -816,14 +783,13 @@ Be honest and specific. Avoid vague platitudes.`,
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
               <XAxis dataKey="day" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} />
               <YAxis domain={[1, 5]} tick={{ fontSize: 11, fill: 'var(--text-muted)' }} />
-              <Tooltip {...TOOLTIP_STYLE} />
+              <Tooltip {...TS} />
               <Bar dataKey="avg" fill="#7c3aed" radius={[6, 6, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </Card>
       </div>
 
-      {/* Keywords */}
       <Card>
         <h3 style={{ margin: '0 0 16px', fontSize: 17, fontWeight: 700 }}>Recurring Themes</h3>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
@@ -832,8 +798,7 @@ Be honest and specific. Avoid vague platitudes.`,
               padding: '8px 16px', borderRadius: 20,
               background: `rgba(124,58,237,${0.25 - i * 0.015})`,
               border: '1px solid rgba(124,58,237,0.3)',
-              fontSize: Math.max(12, 18 - i),
-              fontWeight: 600, color: 'var(--text)'
+              fontSize: Math.max(12, 18 - i), fontWeight: 600, color: 'var(--text)'
             }}>
               {kw.word} <span style={{ opacity: 0.5, fontSize: 11 }}>×{kw.count}</span>
             </div>
@@ -844,7 +809,7 @@ Be honest and specific. Avoid vague platitudes.`,
   );
 };
 
-// ─── Settings ─────────────────────────────────────────────────────────────────
+// ─── Settings Panel ───────────────────────────────────────────────────────────
 
 const SettingsPanel = ({ settings, onSave }) => {
   const [local, setLocal] = useState({ ...settings });
@@ -854,11 +819,10 @@ const SettingsPanel = ({ settings, onSave }) => {
       <Card>
         <h3 style={{ margin: '0 0 20px', fontSize: 18, fontWeight: 700 }}>Settings</h3>
 
-        {/* Encryption */}
         <div style={{ marginBottom: 24, paddingBottom: 24, borderBottom: '1px solid var(--border)' }}>
           <div style={{ fontWeight: 600, marginBottom: 8 }}>Encryption</div>
           <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 }}>
-            XOR-encrypt entries at rest. Password cannot be recovered — keep it safe.
+            AES-256-GCM encryption for the localStorage fallback. Entries on the Umbrel server are stored plaintext, protected by your local network.
           </p>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <Input type="password" value={local.encryptPassword || ''}
@@ -874,7 +838,6 @@ const SettingsPanel = ({ settings, onSave }) => {
           </div>
         </div>
 
-        {/* Theme */}
         <div style={{ marginBottom: 24, paddingBottom: 24, borderBottom: '1px solid var(--border)' }}>
           <div style={{ fontWeight: 600, marginBottom: 8 }}>Theme</div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -887,9 +850,11 @@ const SettingsPanel = ({ settings, onSave }) => {
           </div>
         </div>
 
-        {/* Data */}
         <div style={{ marginBottom: 24 }}>
           <div style={{ fontWeight: 600, marginBottom: 8 }}>Data</div>
+          <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 }}>
+            Entries are stored on your Umbrel device at <code style={{ fontSize: 12, background: 'var(--card-alt)', padding: '2px 6px', borderRadius: 4 }}>app-data/auralog/data/entries.json</code>
+          </p>
           <div style={{ display: 'flex', gap: 8 }}>
             <Button variant="secondary" size="sm" icon={<Download size={13} />}
               onClick={() => onSave({ ...local, exportNow: true })}>
@@ -927,15 +892,11 @@ const EntryEditor = ({ entry, entries, onSave, onCancel }) => {
     }
   };
 
-  const selectedJourney = JOURNEYS.find(j => j.id === form.journey);
-
   return (
     <div style={{ maxWidth: 760 }}>
       {/* Journey */}
       <div style={{ marginBottom: 24 }}>
-        <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 10 }}>
-          Journey
-        </label>
+        <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 10 }}>Journey</label>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {JOURNEYS.map(j => {
             const Icon = j.icon;
@@ -958,44 +919,33 @@ const EntryEditor = ({ entry, entries, onSave, onCancel }) => {
       {/* Mood + Energy */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, marginBottom: 24 }}>
         <div>
-          <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 10 }}>
-            Mood
-          </label>
+          <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 10 }}>Mood</label>
           <div style={{ display: 'flex', gap: 6 }}>
             {MOODS.map(m => (
               <button key={m.value} onClick={() => set('mood', m.value)} style={{
                 flex: 1, padding: '10px 4px', borderRadius: 10,
                 border: `1.5px solid ${form.mood === m.value ? m.color : 'var(--border)'}`,
                 background: form.mood === m.value ? m.bg : 'var(--card)',
-                cursor: 'pointer', fontFamily: 'inherit',
-                transition: 'all 0.15s', textAlign: 'center',
+                cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s', textAlign: 'center',
               }}>
                 <div style={{ fontSize: 22 }}>{m.emoji}</div>
-                <div style={{ fontSize: 10, color: form.mood === m.value ? m.color : 'var(--text-muted)', fontWeight: 600, marginTop: 3 }}>
-                  {m.label}
-                </div>
+                <div style={{ fontSize: 10, color: form.mood === m.value ? m.color : 'var(--text-muted)', fontWeight: 600, marginTop: 3 }}>{m.label}</div>
               </button>
             ))}
           </div>
         </div>
-
         <div>
-          <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 10 }}>
-            Energy
-          </label>
+          <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 10 }}>Energy</label>
           <div style={{ display: 'flex', gap: 6 }}>
             {ENERGY_LEVELS.map(e => (
               <button key={e.value} onClick={() => set('energy', e.value)} style={{
                 flex: 1, padding: '10px 4px', borderRadius: 10,
                 border: `1.5px solid ${form.energy === e.value ? '#d97706' : 'var(--border)'}`,
                 background: form.energy === e.value ? 'rgba(217,119,6,0.15)' : 'var(--card)',
-                cursor: 'pointer', fontFamily: 'inherit',
-                transition: 'all 0.15s', textAlign: 'center',
+                cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s', textAlign: 'center',
               }}>
                 <div style={{ fontSize: 18 }}>{e.icon}</div>
-                <div style={{ fontSize: 10, color: form.energy === e.value ? '#d97706' : 'var(--text-muted)', fontWeight: 600, marginTop: 3 }}>
-                  {e.label}
-                </div>
+                <div style={{ fontSize: 10, color: form.energy === e.value ? '#d97706' : 'var(--text-muted)', fontWeight: 600, marginTop: 3 }}>{e.label}</div>
               </button>
             ))}
           </div>
@@ -1070,13 +1020,13 @@ const EntryEditor = ({ entry, entries, onSave, onCancel }) => {
   );
 };
 
-// ─── Semantic Search ───────────────────────────────────────────────────────────
+// ─── Semantic Search ──────────────────────────────────────────────────────────
 
 const SemanticSearch = ({ entries, onSelect }) => {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [mode, setMode] = useState('local'); // 'local' | 'ai'
+  const [mode, setMode] = useState('local');
 
   const localSearch = useCallback((q) => {
     if (!q.trim()) { setResults([]); return; }
@@ -1130,16 +1080,14 @@ Return ONLY a JSON array of indices (e.g., [2, 5, 0]). Max 5 results. Return [] 
           {mode === 'ai' ? 'AI' : 'Text'}
         </Button>
         {mode === 'ai' && (
-          <Button size="sm" onClick={() => aiSearch(query)} loading={loading}>
-            Search
-          </Button>
+          <Button size="sm" onClick={() => aiSearch(query)} loading={loading}>Search</Button>
         )}
       </div>
 
       {results.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {results.map(e => {
-            const mood = MOODS.find(m => m.value === e.mood);
+            const mood    = MOODS.find(m => m.value === e.mood);
             const journey = JOURNEYS.find(j => j.id === e.journey);
             return (
               <div key={e.id} onClick={() => onSelect(e)} style={{
@@ -1173,64 +1121,32 @@ Return ONLY a JSON array of indices (e.g., [2, 5, 0]). Max 5 results. Return [] 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 
 export default function AuraLog() {
-  const [entries, setEntries] = useState([]);
-  const [settings, setSettings] = useState({ theme: 'dark', encryptEnabled: false, encryptPassword: '' });
-  const [view, setView] = useState('home');
+  const [entries, setEntries]           = useState([]);
+  const [settings, setSettings]         = useState({ theme: 'dark', encryptEnabled: false, encryptPassword: '' });
+  const [view, setView]                 = useState('home');
   const [editingEntry, setEditingEntry] = useState(null);
-  const [locked, setLocked] = useState(false);
-  const [unlockPw, setUnlockPw] = useState('');
-  const [unlockError, setUnlockError] = useState('');
+  const [locked, setLocked]             = useState(false);
+  const [unlockPw, setUnlockPw]         = useState('');
+  const [unlockError, setUnlockError]   = useState('');
   const [selectedEntry, setSelectedEntry] = useState(null);
   const [filterJourney, setFilterJourney] = useState('');
-  const [filterTag, setFilterTag] = useState('');
-  const [aiEnabled, setAiEnabled] = useState(null); // null = unknown, true/false after probe
+  const [filterTag, setFilterTag]         = useState('');
 
-  // Probe proxy status (tells us if API key is configured server-side)
+  // ── Load — fetch from server on mount ──────────────────────────────────────
   useEffect(() => {
-    fetch('/api/status')
-      .then(r => r.json())
-      .then(d => setAiEnabled(d.aiEnabled))
-      .catch(() => setAiEnabled(false));
-  }, []);
+    const s = loadSettings();
+    if (s) setSettings(prev => ({ ...prev, ...s }));
+    apiLoadEntries().then(loaded => setEntries(loaded));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Load — async because AES-GCM decrypt is async
-  useEffect(() => {
-    const load = async () => {
-      const s = loadSettings();
-      if (s) setSettings(prev => ({ ...prev, ...s }));
-
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return;
-
-      if (s?.encryptEnabled) {
-        if (s?.encryptPassword) {
-          const dec = await aesDecrypt(raw, s.encryptPassword);
-          if (dec) setEntries(dec);
-          else setLocked(true);
-        } else {
-          setLocked(true);
-        }
-      } else {
-        try { setEntries(JSON.parse(raw)); } catch {}
-      }
-    };
-    load();
-  }, []);
-
-  // Save — async because AES-GCM encrypt is async
+  // ── Save — debounced write to server whenever entries change ───────────────
   useEffect(() => {
     if (locked) return;
-    const save = async () => {
-      const data = settings.encryptEnabled && settings.encryptPassword
-        ? await aesEncrypt(entries, settings.encryptPassword)
-        : JSON.stringify(entries);
-      localStorage.setItem(STORAGE_KEY, data);
-      saveSettings(settings);
-    };
-    save();
+    saveSettings(settings);
+    apiSaveEntries(entries);
   }, [entries, settings, locked]);
 
-  // Theme
+  // ── Theme ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     const themes = {
       dark:  { '--bg': '#0f0f13', '--card': '#1a1a22', '--card-alt': '#22222e', '--border': '#2a2a38', '--text': '#e8e8f0', '--text-muted': '#6b6b82', '--input': '#16161e', '--accent': '#7c3aed' },
@@ -1240,23 +1156,8 @@ export default function AuraLog() {
     const t = themes[settings.theme] || themes.dark;
     Object.entries(t).forEach(([k, v]) => document.documentElement.style.setProperty(k, v));
     document.body.style.background = t['--bg'];
-    document.body.style.color = t['--text'];
+    document.body.style.color      = t['--text'];
   }, [settings.theme]);
-
-  const handleUnlock = async () => {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw && unlockPw) {
-      const dec = await aesDecrypt(raw, unlockPw);
-      if (dec) {
-        setEntries(dec);
-        setSettings(p => ({ ...p, encryptPassword: unlockPw }));
-        setLocked(false);
-        setUnlockError('');
-      } else {
-        setUnlockError('Incorrect password');
-      }
-    }
-  };
 
   const saveEntry = (form) => {
     const now = new Date().toISOString();
@@ -1276,8 +1177,8 @@ export default function AuraLog() {
   const handleSettings = (s) => {
     if (s.exportNow) {
       const blob = new Blob([JSON.stringify(entries, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url;
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a'); a.href = url;
       a.download = `auralog-${new Date().toISOString().split('T')[0]}.json`; a.click();
       return;
     }
@@ -1302,48 +1203,26 @@ export default function AuraLog() {
     setSettings(s);
   };
 
-  const allTags = [...new Set(entries.flatMap(e => e.tags || []))];
+  const allTags        = [...new Set(entries.flatMap(e => e.tags || []))];
   const filteredEntries = entries.filter(e => {
     const mj = !filterJourney || e.journey === filterJourney;
-    const mt = !filterTag || e.tags?.includes(filterTag);
+    const mt = !filterTag    || e.tags?.includes(filterTag);
     return mj && mt;
   });
-
-  // Locked screen
-  if (locked) return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)', fontFamily: 'inherit' }}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700;12..96,800&display=swap');
-        * { box-sizing: border-box; }
-        body { font-family: 'Bricolage Grotesque', sans-serif; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-      `}</style>
-      <Card style={{ maxWidth: 380, width: '100%', textAlign: 'center' }}>
-        <Lock size={40} style={{ color: '#7c3aed', marginBottom: 16 }} />
-        <h2 style={{ margin: '0 0 8px', fontSize: 22, fontWeight: 800 }}>Journal Locked</h2>
-        <p style={{ color: 'var(--text-muted)', fontSize: 14, marginBottom: 24 }}>Enter your password to access your entries.</p>
-        <Input type="password" value={unlockPw} onChange={e => setUnlockPw(e.target.value)}
-          placeholder="Password" style={{ marginBottom: 8 }}
-          onKeyPress={e => e.key === 'Enter' && handleUnlock()} />
-        {unlockError && <div style={{ color: '#f87171', fontSize: 13, marginBottom: 8 }}>{unlockError}</div>}
-        <Button onClick={handleUnlock} style={{ width: '100%', justifyContent: 'center' }}>Unlock</Button>
-      </Card>
-    </div>
-  );
-
-  const NAV = [
-    { id: 'home',    label: 'Home',     icon: Flame },
-    { id: 'new',     label: 'Write',    icon: Feather },
-    { id: 'entries', label: 'Entries',  icon: BookOpen },
-    { id: 'search',  label: 'Search',   icon: Search },
-    { id: 'insights',label: 'Insights', icon: TrendingUp },
-    { id: 'settings',label: 'Settings', icon: Settings },
-  ];
 
   const todayEntries = entries.filter(e => {
     const d = new Date(e.date); const now = new Date();
     return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
   });
+
+  const NAV = [
+    { id: 'home',     label: 'Home',     icon: Flame     },
+    { id: 'new',      label: 'Write',    icon: Feather   },
+    { id: 'entries',  label: 'Entries',  icon: BookOpen  },
+    { id: 'search',   label: 'Search',   icon: Search    },
+    { id: 'insights', label: 'Insights', icon: TrendingUp},
+    { id: 'settings', label: 'Settings', icon: Settings  },
+  ];
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg)', fontFamily: 'inherit' }}>
@@ -1380,11 +1259,11 @@ export default function AuraLog() {
 
         <nav style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2, paddingTop: 4 }}>
           {NAV.map(n => {
-            const Icon = n.icon;
+            const Icon   = n.icon;
             const active = view === n.id || (n.id === 'new' && view === 'edit');
             return (
               <button key={n.id} className="nav-btn" onClick={() => {
-                if (n.id === 'new') { setEditingEntry(null); }
+                if (n.id === 'new') setEditingEntry(null);
                 setView(n.id === 'new' ? 'edit' : n.id);
               }} style={{
                 display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
@@ -1399,28 +1278,10 @@ export default function AuraLog() {
           })}
         </nav>
 
-        <div style={{ padding: '12px 8px 20px', borderTop: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {/* AI status — reflects server-side key config */}
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
-            borderRadius: 8, fontSize: 12, color: 'var(--text-muted)',
-          }}>
-            <div style={{
-              width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
-              background: aiEnabled === null ? '#6b6b82' : aiEnabled ? '#059669' : '#dc2626',
-            }} />
-            {aiEnabled === null ? 'Checking AI...' : aiEnabled ? 'AI ready' : 'AI offline'}
+        <div style={{ padding: '12px 8px 20px', borderTop: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', padding: '4px 12px' }}>
+            🔒 Data stored on device
           </div>
-          {/* Encryption status */}
-          <button onClick={() => { setView('settings'); }} style={{
-            display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
-            borderRadius: 8, border: 'none', background: 'transparent',
-            color: 'var(--text-muted)', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12,
-            textAlign: 'left',
-          }}>
-            {settings.encryptEnabled ? <Lock size={12} /> : <Unlock size={12} />}
-            {settings.encryptEnabled ? 'AES-256 on' : 'Unencrypted'}
-          </button>
         </div>
       </div>
 
@@ -1441,7 +1302,6 @@ export default function AuraLog() {
               </div>
 
               <div style={{ display: 'grid', gap: 24 }}>
-                {/* Quick write CTA */}
                 <div onClick={() => { setEditingEntry(null); setView('edit'); }} style={{
                   padding: '28px 32px', borderRadius: 16, cursor: 'pointer',
                   background: 'linear-gradient(135deg, #7c3aed22 0%, #0284c722 100%)',
@@ -1455,24 +1315,19 @@ export default function AuraLog() {
                   <Feather size={28} style={{ color: '#7c3aed', opacity: 0.7 }} />
                 </div>
 
-                {/* Recent entries */}
                 {entries.length > 0 && (
                   <div>
-                    <h3 style={{ margin: '0 0 14px', fontSize: 15, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                      Recent
-                    </h3>
+                    <h3 style={{ margin: '0 0 14px', fontSize: 15, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Recent</h3>
                     <div style={{ display: 'grid', gap: 10 }}>
                       {entries.slice(0, 5).map(e => {
-                        const mood = MOODS.find(m => m.value === e.mood);
+                        const mood    = MOODS.find(m => m.value === e.mood);
                         const journey = JOURNEYS.find(j => j.id === e.journey);
                         return (
                           <Card key={e.id} onClick={() => { setSelectedEntry(e); setView('read'); }} style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
                             <span style={{ fontSize: 28, flexShrink: 0 }}>{mood?.emoji}</span>
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 3 }}>{e.title}</div>
-                              <div style={{ fontSize: 13, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {e.content.slice(0, 100)}
-                              </div>
+                              <div style={{ fontSize: 13, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.content.slice(0, 100)}</div>
                             </div>
                             <div style={{ flexShrink: 0, textAlign: 'right' }}>
                               <Badge color={journey?.color}>{journey?.label}</Badge>
@@ -1487,7 +1342,6 @@ export default function AuraLog() {
                   </div>
                 )}
 
-                {/* Weekly digest */}
                 <WeeklyDigest entries={entries} />
               </div>
             </div>
@@ -1514,25 +1368,17 @@ export default function AuraLog() {
 
           {/* READ */}
           {view === 'read' && selectedEntry && (() => {
-            const e = selectedEntry;
-            const mood = MOODS.find(m => m.value === e.mood);
+            const e       = selectedEntry;
+            const mood    = MOODS.find(m => m.value === e.mood);
             const journey = JOURNEYS.find(j => j.id === e.journey);
-            const JIcon = journey?.icon || Heart;
+            const JIcon   = journey?.icon || Heart;
             return (
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
-                  <Button variant="ghost" onClick={() => setView('entries')} icon={<ChevronRight size={14} style={{ transform: 'rotate(180deg)' }} />}>
-                    Back
-                  </Button>
+                  <Button variant="ghost" onClick={() => setView('entries')} icon={<ChevronRight size={14} style={{ transform: 'rotate(180deg)' }} />}>Back</Button>
                   <div style={{ flex: 1 }} />
-                  <Button variant="secondary" size="sm" icon={<Edit2 size={13} />}
-                    onClick={() => { setEditingEntry(e); setView('edit'); }}>
-                    Edit
-                  </Button>
-                  <Button variant="danger" size="sm" icon={<Trash2 size={13} />}
-                    onClick={() => { deleteEntry(e.id); setView('entries'); }}>
-                    Delete
-                  </Button>
+                  <Button variant="secondary" size="sm" icon={<Edit2 size={13} />} onClick={() => { setEditingEntry(e); setView('edit'); }}>Edit</Button>
+                  <Button variant="danger" size="sm" icon={<Trash2 size={13} />} onClick={() => { deleteEntry(e.id); setView('entries'); }}>Delete</Button>
                 </div>
 
                 <div style={{ marginBottom: 24 }}>
@@ -1571,18 +1417,12 @@ export default function AuraLog() {
           {view === 'entries' && (
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-                <h1 style={{ margin: 0, fontSize: 26, fontWeight: 800, letterSpacing: '-0.03em' }}>
-                  All Entries
-                </h1>
-                <Button icon={<Plus size={14} />} onClick={() => { setEditingEntry(null); setView('edit'); }}>
-                  New Entry
-                </Button>
+                <h1 style={{ margin: 0, fontSize: 26, fontWeight: 800, letterSpacing: '-0.03em' }}>All Entries</h1>
+                <Button icon={<Plus size={14} />} onClick={() => { setEditingEntry(null); setView('edit'); }}>New Entry</Button>
               </div>
 
-              {/* Filters */}
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 20 }}>
-                <Button variant={!filterJourney ? 'primary' : 'secondary'} size="sm"
-                  onClick={() => setFilterJourney('')}>All</Button>
+                <Button variant={!filterJourney ? 'primary' : 'secondary'} size="sm" onClick={() => setFilterJourney('')}>All</Button>
                 {JOURNEYS.filter(j => entries.some(e => e.journey === j.id)).map(j => {
                   const Icon = j.icon;
                   return (
@@ -1603,9 +1443,9 @@ export default function AuraLog() {
               ) : (
                 <div style={{ display: 'grid', gap: 12 }}>
                   {filteredEntries.map(e => {
-                    const mood = MOODS.find(m => m.value === e.mood);
+                    const mood    = MOODS.find(m => m.value === e.mood);
                     const journey = JOURNEYS.find(j => j.id === e.journey);
-                    const JIcon = journey?.icon || Heart;
+                    const JIcon   = journey?.icon || Heart;
                     return (
                       <Card key={e.id} onClick={() => { setSelectedEntry(e); setView('read'); }}
                         style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>

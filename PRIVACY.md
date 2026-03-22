@@ -1,6 +1,6 @@
 # AuraLog Privacy Model
 
-This document explains precisely what data AuraLog collects, stores, transmits, and does not transmit. It is intended to be specific enough that a technically literate person can verify every claim by reading the source code.
+This document explains precisely what data AuraLog collects, stores, transmits, and does not transmit.
 
 ---
 
@@ -8,8 +8,9 @@ This document explains precisely what data AuraLog collects, stores, transmits, 
 
 | Category | Status |
 |---|---|
-| Journal entries stored | ✅ Locally in your browser (localStorage) |
-| Journal entries sent to a server | ❌ Never |
+| Journal entries stored | ✅ On your Umbrel device at `~/umbrel/app-data/auralog/data/entries.json` |
+| Journal entries in browser localStorage | ✅ As fallback if server unreachable (local dev only) |
+| Journal entries sent to a cloud server | ❌ Never |
 | API key stored | ✅ Server-side in `.env` only |
 | API key visible to browser | ❌ Never |
 | Analytics / telemetry | ❌ None |
@@ -23,116 +24,122 @@ This document explains precisely what data AuraLog collects, stores, transmits, 
 
 ## Data Storage
 
-All journal entries, settings, and preferences are stored exclusively in your browser's **`localStorage`**. This storage:
+### Where entries live
 
-- Is scoped to the origin (`http://umbrel.local:3850`) — no other site can read it
-- Never leaves your device through AuraLog
-- Is under your full control — you can export it as JSON at any time, or wipe it through your browser settings
+Journal entries are stored as JSON at:
+```
+~/umbrel/app-data/auralog/data/entries.json
+```
+on your Umbrel device's filesystem. This is a Docker volume mount (`./data:/data` in `docker-compose.yml`).
 
-**No database, no cloud sync, no account.**
+The storage flow:
+```
+Browser → POST /api/entries → nginx → proxy container → writes /data/entries.json
+                                                            ↕
+                               ~/umbrel/app-data/auralog/data/entries.json (host)
+```
+
+This means:
+- Entries survive container restarts and rebuilds
+- Entries are accessible from **any browser on your local network** — not just the one that wrote them
+- Entries are **not** tied to a specific browser or device
+- You can back up entries by copying the file directly
+
+### Local dev fallback
+
+When running locally without Docker (e.g., `npm run dev` on your laptop), the proxy may not be running. In that case, the app falls back to `localStorage` automatically. This fallback is silent — entries are saved to the browser and a warning is logged to the console.
+
+### Settings
+
+Theme, encryption preferences, and UI state remain in `localStorage`. These are not sensitive and don't require server persistence.
 
 ---
 
-## Encryption at Rest
+## Encryption
 
-When you enable encryption in Settings, AuraLog uses **AES-256-GCM** to encrypt your entries before writing them to localStorage.
+When you enable encryption in Settings, **this currently applies to the localStorage fallback path only**. Entries stored on the Umbrel server are stored in plaintext JSON, protected by:
 
-Technical details:
-- Key derivation: **PBKDF2-SHA-256** with **310,000 iterations** (OWASP 2024 recommendation)
-- Each encrypt operation generates a fresh random **16-byte salt** and **12-byte IV**
-- Storage format: `base64( salt[16] || iv[12] || ciphertext )`
-- Uses the browser's native **Web Crypto API** (`crypto.subtle`) — no third-party crypto library
-- Your password is never stored anywhere; it exists only in memory while the app is open
+1. **Network isolation**: The data directory is inside a Docker container, only accessible via the internal Docker network
+2. **Umbrel network auth**: The Umbrel dashboard sits in front of the app; external access requires Umbrel's authentication
+3. **Physical access**: The device is on your local network under your control
 
-Without your password, the stored data is computationally infeasible to decrypt.
+If you require encryption at rest for the server-side storage (e.g., the device is in a shared space), this is on the roadmap. For most personal Umbrel users, the above protections are sufficient.
 
-Verify in source: `src/App.jsx` — functions `aesEncrypt`, `aesDecrypt`, `deriveKey`.
+Verify the storage path: `server/index.js` — constants `DATA_DIR` and `ENTRIES_FILE`.
+Verify the volume mount: `docker-compose.yml` — `./data:/data` under the proxy service.
 
 ---
 
 ## AI Features and the Anthropic API
 
-When you use an AI feature (entry reflection, weekly digest, smart prompts, semantic search, pattern analysis), AuraLog sends a request to **Anthropic's API**. Here is exactly what is sent and what is not.
+When you use an AI feature, AuraLog sends a request to Anthropic's API. Here is exactly what is sent.
 
 ### What is sent to Anthropic
 
-- The **text content** of relevant journal entries (the specific entries used for context are shown in the UI)
+- The text content of relevant journal entries
 - A system prompt (readable in `src/App.jsx`)
-- No personally identifying information beyond what you wrote in your journal
+- No personally identifying information beyond what you wrote
 
 ### What is NOT sent
 
-- Your name, email, or any account information (you have none)
-- Your IP address as seen by Anthropic is your Umbrel node's IP, not your personal device's IP, since the request originates from the proxy container
-- The request is made **server-to-server** (your Umbrel node → Anthropic), not browser-to-Anthropic
+- Your name, email, or any account information
+- Your IP address (the request originates from the proxy container on your Umbrel node, not from your personal device's IP)
 
 ### How the API key is protected
 
-The Anthropic API key is stored in a `.env` file on your Umbrel node. It is:
+The Anthropic API key is stored in `.env` on your Umbrel node. It is:
 
-1. Loaded only by the proxy server (`server/index.js`) at startup
+1. Loaded only by `server/index.js` at container startup
 2. Never passed to the browser in any response
 3. Never logged
 4. Stripped from any headers the browser might attempt to send (see `proxy_set_header Authorization ""` in `docker/nginx.conf`)
 
-The browser communicates with `/api/claude` (your local nginx). Nginx forwards the request to the proxy container on an **internal Docker network** that is not exposed to the host. The proxy appends the API key and forwards to Anthropic. The browser never sees the key.
+The browser calls `/api/claude` (your local nginx). Nginx forwards to the proxy on an `internal: true` Docker network (port not exposed to host). The proxy appends the key and calls Anthropic. The browser never sees the key.
 
-Verify in source: `server/index.js` (proxy logic), `docker/nginx.conf` (header stripping), `docker-compose.yml` (network isolation).
+Verify: `server/index.js` (proxy), `docker/nginx.conf` (header stripping), `docker-compose.yml` (network isolation).
 
 ### Anthropic's handling of your data
 
-When AI features are used, your journal text is sent to Anthropic. Their data handling is governed by their [Privacy Policy](https://www.anthropic.com/privacy) and [Usage Policies](https://www.anthropic.com/legal/usage-policy). Key points as of this writing:
-- Anthropic may use API inputs to improve models unless you opt out (see their API console)
-- You can request deletion of data associated with your API key through Anthropic's support
-
-**AI features are entirely optional.** All journaling, analytics, and encryption work with no API key set and no Anthropic communication.
+When AI features are used, your journal text is sent to Anthropic. Their handling is governed by their [Privacy Policy](https://www.anthropic.com/privacy). AI features are entirely optional.
 
 ---
 
 ## Network Requests at Runtime
 
-When the app is running with default settings and no AI features triggered:
+When running with default settings and no AI features triggered:
 
 | Destination | Purpose | When |
 |---|---|---|
-| `fonts.googleapis.com` | Fetch Bricolage Grotesque font CSS | Page load |
+| `fonts.googleapis.com` | Fetch font CSS | Page load |
 | `fonts.gstatic.com` | Fetch font files | Page load, cached |
 | `api.anthropic.com` | AI features | Only when you click an AI button |
 
-No other external network requests are made.
-
-**Fonts**: Google Fonts transmits your IP to Google when loading. If this concerns you, you can self-host the font by downloading it and placing it in `public/fonts/`, then updating the CSS import in `public/index.html`. We may add a self-hosted font option in a future release.
+**Fonts**: If this concerns you, self-host the font: download Bricolage Grotesque, place in `public/fonts/`, update the `@import` in `public/index.html`.
 
 ---
 
-## What We Cannot See
+## Export and Backup
 
-Because AuraLog has no server, no accounts, and no telemetry:
+**Export from UI**: Settings → Export JSON. Downloads a copy to your device.
 
-- We cannot see your journal entries
-- We cannot see how often you use the app
-- We cannot see your mood data
-- We cannot see which features you use
-- We cannot identify you in any way
+**Direct file backup** (Umbrel):
+```bash
+ssh umbrel@umbrel.local
+cp ~/umbrel/app-data/auralog/data/entries.json ~/entries-backup.json
+```
 
-There is no "we" in the operational sense. The app runs entirely on your hardware.
-
----
-
-## Export and Deletion
-
-**Export**: Settings → Export JSON. Downloads a plaintext JSON file of all your entries to your device.
-
-**Delete everything**: In your browser, go to DevTools → Application → Local Storage → `http://umbrel.local:3850` → delete all keys. Or uninstall AuraLog and `rm -rf ~/umbrel/app-data/auralog`.
-
-There is no server-side data to delete because there is no server-side data.
+**Delete everything**:
+```bash
+rm ~/umbrel/app-data/auralog/data/entries.json
+```
+Or uninstall AuraLog entirely: `sudo rm -rf ~/umbrel/app-data/auralog`
 
 ---
 
 ## Open Source
 
-The full source code is available at `https://github.com/YOUR_USERNAME/auralog`. Every claim in this document can be verified by reading the code. If you find a discrepancy, please open an issue.
+Full source at `https://github.com/nillawafa/auralog`. Every claim in this document is verifiable by reading the source. Open an issue if you find a discrepancy.
 
 ---
 
-*Last updated: 2025. This document is versioned alongside the codebase.*
+*Updated to reflect server-side persistence replacing browser-only localStorage.*
