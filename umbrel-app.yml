@@ -1,78 +1,58 @@
 manifestVersion: 1
 id: auralog
 name: AuraLog
-tagline: AI-powered private journal with Claude, mood tracking & pattern analytics
+tagline: AI-powered private journal with mood tracking and insights
 category: productivity
 version: "1.0.0"
 port: 3850
 description: >-
-  AuraLog is a privacy-first journaling app that combines local-first data storage
-  with the intelligence of Claude AI — giving you insights your generic journal app
-  never could.
+  AuraLog is a privacy-first journaling app that runs entirely on your Umbrel.
+  Your entries are stored on your device and never leave your local network —
+  except when you explicitly trigger an AI feature.
 
 
-  **What makes AuraLog different:**
+  **What makes AuraLog different from other journaling apps:**
 
 
-  🧠 **Real AI, not fake AI** — Claude analyzes your actual entries to surface
+  🧠 **Real AI insights** — Claude analyzes your actual entries to surface
   non-obvious patterns, emotional trajectories, and behavioral blindspots.
-  Not keyword matching. Not sentiment scores. Genuine synthesis.
+  Not keyword matching. Genuine synthesis.
 
 
-  📓 **Weekly Digest** — Every week, get an AI-generated narrative summary of your
-  entries: highlights, emotional patterns, growth observations, and a specific
-  intention for the following week.
+  📓 **Weekly Digest** — An AI-generated narrative of your week: highlights,
+  emotional patterns, growth observations, and a specific intention for the
+  week ahead.
 
 
-  💬 **Conversational Journal Search** — Ask questions like "when did I last feel
-  really good about my work?" or "what do I write about when I'm anxious?" and
-  get semantically relevant results across all your entries.
+  💬 **Ask your journal** — Conversational search across all your entries.
+  Ask things like "when did I last feel good about my work?" and get
+  semantically relevant results.
 
 
-  ⚡ **Smart Prompts** — AI generates writing prompts tailored to your current mood,
-  chosen journey, and recent entry history. Not generic. Contextual.
+  ⚡ **Smart Prompts** — Writing prompts tailored to your current mood,
+  journey category, and recent entry history.
 
 
   📊 **Deep Analytics** — Mood trends, energy tracking, best days of the week,
-  journey breakdown, recurring themes, and streak tracking.
+  journey breakdown, and recurring word themes. No AI key required.
 
 
-  🔒 **Complete Privacy** — All data stored in your browser's localStorage.
-  Nothing leaves your Umbrel node. Optional XOR encryption adds a password layer.
-  Export anytime as JSON.
+  🔒 **Complete Privacy** — Journal entries are stored on your Umbrel device
+  at a persistent data path. Optional encryption. Zero telemetry.
 
 
-  **Journey Categories:** Personal, Work, Reading, Creative, Learning, Health
+  **Journey categories:** Personal, Work, Reading, Creative, Learning, Health
 
 
-  **Features:**
-  - Mood (1-5) + Energy (1-5) tracking per entry
-  - 6 journey categories with color-coded organization  
-  - AI reflection panel on every entry
-  - Conversational "Ask AI" interface per entry
-  - Semantic + full-text search
-  - Weekly AI digest
-  - Analytics: mood trends, day-of-week patterns, word clouds, emotion radar
-  - XOR encryption at rest
-  - JSON export/import
-  - Dark / Light / OLED themes
-  - Day streak tracking
+  **AI features require an Anthropic API key.** All journaling and analytics
+  work without one. Enter your key in the app password field at install time.
 
-
-  **Requirements:** You need an Anthropic API key to use AI features.
-  All analytics and basic journaling work without it.
-
-developer: AuraLog
-website: https://github.com/nillawafa/auralog
-repo: https://github.com/nillawafa/auralog
-support: https://github.com/nillawafa/auralog/issues
-gallery:
-  - 1.png
-  - 2.png
-  - 3.png
-releaseNotes: >-
-  Initial release. Full journaling with Claude AI integration, mood/energy
-  tracking, weekly digest, semantic search, and comprehensive analytics.
+developer: Robert Kobatzki
+website: https://github.com/nillawafa/Auralog
+repo: https://github.com/nillawafa/Auralog
+support: https://github.com/nillawafa/Auralog/issues
+gallery: []
+releaseNotes: ""
 dependencies: []
 path: ""
 defaultUsername: ""
