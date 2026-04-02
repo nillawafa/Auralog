@@ -4,9 +4,6 @@ on:
   push:
     tags: ['v*']
 
-env:
-  REGISTRY: ghcr.io
-
 jobs:
   build-web:
     runs-on: ubuntu-latest
@@ -15,36 +12,26 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Extract metadata (web)
-        id: meta-web
+      - uses: docker/setup-buildx-action@v3
+      - id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/auralog
           tags: |
             type=semver,pattern={{version}}
             type=raw,value=latest
-
-      - name: Build and push web image
-        uses: docker/build-push-action@v5
+      - uses: docker/build-push-action@v5
         with:
           context: .
-          dockerfile: Dockerfile
+          file: Dockerfile
           push: true
-          tags: ${{ steps.meta-web.outputs.tags }}
+          tags: ${{ steps.meta.outputs.tags }}
           platforms: linux/amd64,linux/arm64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
   build-proxy:
     runs-on: ubuntu-latest
@@ -53,33 +40,23 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Extract metadata (proxy)
-        id: meta-proxy
+      - uses: docker/setup-buildx-action@v3
+      - id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/auralog-proxy
           tags: |
             type=semver,pattern={{version}}
             type=raw,value=latest
-
-      - name: Build and push proxy image
-        uses: docker/build-push-action@v5
+      - uses: docker/build-push-action@v5
         with:
           context: ./server
-          dockerfile: Dockerfile
+          file: server/Dockerfile
           push: true
-          tags: ${{ steps.meta-proxy.outputs.tags }}
+          tags: ${{ steps.meta.outputs.tags }}
           platforms: linux/amd64,linux/arm64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max

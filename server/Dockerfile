@@ -1,18 +1,12 @@
-FROM node:20-alpine AS builder
+FROM node:20-alpine
 
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci
+RUN npm install --production
 
 COPY . .
-RUN node node_modules/vite/bin/vite.js build
 
-FROM nginx:alpine
+EXPOSE 3851
 
-COPY --from=builder /app/dist /usr/share/nginx/html
-COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
-
-EXPOSE 80
-
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["node", "index.js"]
