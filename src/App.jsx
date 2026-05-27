@@ -100,7 +100,7 @@ const callClaude = async (systemPrompt, userMessage, maxTokens = 800) => {
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     if (res.status === 503 && err.code === 'NO_API_KEY') {
-      throw new Error('AI features require an Anthropic API key. Set ANTHROPIC_API_KEY in your .env file.');
+      throw new Error('AI features require an Anthropic API key. Add your key in Settings.');
     }
     if (res.status === 429) throw new Error('Rate limit hit. Wait a moment and try again.');
     throw new Error(err.error || `Proxy error: ${res.status}`);
@@ -813,11 +813,77 @@ Be honest and specific. Avoid vague platitudes.`,
 
 const SettingsPanel = ({ settings, onSave }) => {
   const [local, setLocal] = useState({ ...settings });
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [apiKeyStatus, setApiKeyStatus] = useState({ configured: false, hint: null });
+  const [apiKeySaving, setApiKeySaving] = useState(false);
+  const [apiKeyMsg, setApiKeyMsg] = useState('');
+
+  useEffect(() => {
+    fetch('/api/settings/apikey').then(r => r.json()).then(setApiKeyStatus).catch(() => {});
+  }, []);
+
+  const handleSaveApiKey = async () => {
+    if (!apiKeyInput.trim()) return;
+    setApiKeySaving(true);
+    setApiKeyMsg('');
+    try {
+      const r = await fetch('/api/settings/apikey', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: apiKeyInput.trim() }),
+      });
+      const result = await r.json();
+      if (!r.ok) throw new Error(result.error);
+      setApiKeyStatus({ configured: true, hint: result.hint });
+      setApiKeyInput('');
+      setApiKeyMsg('API key saved successfully');
+    } catch (err) {
+      setApiKeyMsg(err.message);
+    }
+    setApiKeySaving(false);
+  };
+
+  const handleRemoveApiKey = async () => {
+    try {
+      await fetch('/api/settings/apikey', { method: 'DELETE' });
+      setApiKeyStatus({ configured: false, hint: null });
+      setApiKeyMsg('API key removed');
+    } catch (err) {
+      setApiKeyMsg(err.message);
+    }
+  };
 
   return (
     <div style={{ maxWidth: 560 }}>
       <Card>
         <h3 style={{ margin: '0 0 20px', fontSize: 18, fontWeight: 700 }}>Settings</h3>
+
+        <div style={{ marginBottom: 24, paddingBottom: 24, borderBottom: '1px solid var(--border)' }}>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>Anthropic API Key</div>
+          <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 }}>
+            Required for AI features (prompts, reflections, weekly digest). Get a key at console.anthropic.com. All journaling works without it.
+          </p>
+          {apiKeyStatus.configured ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ padding: '8px 14px', borderRadius: 8, background: 'rgba(22,163,74,0.15)', color: '#16a34a', fontSize: 13, fontWeight: 600 }}>
+                Key configured ({apiKeyStatus.hint})
+              </div>
+              <Button variant="secondary" size="sm" onClick={handleRemoveApiKey}>Remove</Button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Input type="password" value={apiKeyInput}
+                onChange={e => setApiKeyInput(e.target.value)}
+                placeholder="sk-ant-..."
+                style={{ flex: 1 }}
+              />
+              <Button onClick={handleSaveApiKey} disabled={apiKeySaving}>
+                {apiKeySaving ? 'Saving...' : 'Save Key'}
+              </Button>
+            </div>
+          )}
+          {apiKeyMsg && <div style={{ marginTop: 8, fontSize: 13, color: 'var(--text-muted)' }}>{apiKeyMsg}</div>}
+        </div>
 
         <div style={{ marginBottom: 24, paddingBottom: 24, borderBottom: '1px solid var(--border)' }}>
           <div style={{ fontWeight: 600, marginBottom: 8 }}>Encryption</div>
