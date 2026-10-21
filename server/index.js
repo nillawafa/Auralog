@@ -22,6 +22,7 @@ import { createServer } from 'http';
 import { readFileSync, writeFileSync, renameSync, unlinkSync, mkdirSync, existsSync } from 'fs';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
+import { isAllowedOrigin, STRICT_ORIGIN } from './origin.js';
 
 const app = express();
 const PORT = process.env.PORT || 3851;
@@ -56,31 +57,11 @@ function getApiKey() {
 
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
 
-function isLocalOrigin(origin) {
-  if (!origin) return true;
-  if (!origin.startsWith('http://')) return false;
- 
-  const host = origin.slice(7).split(':')[0]; // strip "http://" then port
- 
-  if (host.endsWith('.local') || host === 'local') return true;
-  if (host === 'localhost' || host === '127.0.0.1') return true;
- 
-  const parts = host.split('.').map(Number);
-  if (parts.length === 4 && parts.every(n => !isNaN(n) && n >= 0 && n <= 255)) {
-    const [a, b] = parts;
-    if (a === 10) return true;
-    if (a === 192 && b === 168) return true;
-    if (a === 172 && b >= 16 && b <= 31) return true;
-    if (a === 100 && b >= 64 && b <= 127) return true; // Tailscale
-  }
-  return false;
-}
- 
 app.use((req, res, next) => {
   const origin = req.headers.origin || '';
-  if (isLocalOrigin(origin)) return next();
-  console.warn(`[security] blocked non-local origin: "${origin}"`);
-  return res.status(403).json({ error: 'Forbidden: requests must originate from the local network' });
+  if (isAllowedOrigin(origin, req.headers.host)) return next();
+  console.warn(`[security] blocked origin: "${origin}" (host: "${req.headers.host || ''}", strict: ${STRICT_ORIGIN})`);
+  return res.status(403).json({ error: 'Forbidden: request origin does not match this AuraLog host' });
 });
 const limiter = rateLimit({
   windowMs: 60 * 1000,

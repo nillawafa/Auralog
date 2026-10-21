@@ -11,6 +11,7 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - PORT=3851
       - NODE_ENV=production
+      - AURALOG_STRICT_ORIGIN=${AURALOG_STRICT_ORIGIN:-false}
     networks:
       - auralog_net
 
