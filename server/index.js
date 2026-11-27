@@ -27,7 +27,7 @@ import { isAllowedOrigin, STRICT_ORIGIN } from './origin.js';
 const app = express();
 const PORT = process.env.PORT || 3851;
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
-const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
+const CLAUDE_MODEL = process.env.AURALOG_MODEL || 'claude-sonnet-5-5';
 
 // Where data lives inside the container.
 // docker-compose mounts: ${APP_DATA_DIR}/data:/data
@@ -168,20 +168,15 @@ app.post('/api/claude', async (req, res) => {
     });
   }
 
-  const { prompt, systemPrompt, context } = req.body;
+  // The web app sends { system, messages: [{ role: 'user', content }], max_tokens }.
+  const { system, messages, max_tokens } = req.body;
+  const prompt = Array.isArray(messages) && messages.length === 1 ? messages[0].content : null;
   if (!prompt || typeof prompt !== 'string') {
     return res.status(400).json({ error: 'Missing or invalid prompt' });
   }
   if (prompt.length > 8000) {
     return res.status(400).json({ error: 'Prompt too long (max 8000 chars)' });
   }
-
-  const messages = [];
-  if (context && typeof context === 'string') {
-    messages.push({ role: 'user', content: context });
-    messages.push({ role: 'assistant', content: 'I understand the context. How can I help?' });
-  }
-  messages.push({ role: 'user', content: prompt });
 
   try {
     const upstream = await fetch(ANTHROPIC_API_URL, {
@@ -193,9 +188,10 @@ app.post('/api/claude', async (req, res) => {
       },
       body: JSON.stringify({
         model: CLAUDE_MODEL,
-        max_tokens: 1024,
-        system: systemPrompt || 'You are a thoughtful journaling assistant. Be empathetic, insightful, and concise.',
-        messages,
+        max_tokens: Math.min(Number(max_tokens) || 1024, 4096),
+        output_config: { effort: 'low' },
+        system: typeof system === 'string' && system ? system : 'You are a thoughtful journaling assistant. Be empathetic, insightful, and concise.',
+        messages: [{ role: 'user', content: prompt }],
       }),
     });
 
@@ -211,7 +207,8 @@ app.post('/api/claude', async (req, res) => {
       });
     }
 
-    res.json({ content: data.content });
+    // Newer models can return thinking blocks before the text; the web app reads content[0].text.
+    res.json({ content: (data.content || []).filter(b => b.type === 'text') });
 
   } catch (err) {
     console.error('[proxy] fetch error:', err.message);
