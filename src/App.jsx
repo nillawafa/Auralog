@@ -147,11 +147,11 @@ const apiLoadEntries = async () => {
   try {
     const res = await fetch('/api/entries');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
+    return { entries: await res.json(), fromServer: true };
   } catch (err) {
     console.warn('[storage] apiLoadEntries failed, falling back to localStorage:', err.message);
-    try { return JSON.parse(localStorage.getItem('auralog_v2_entries') || '[]'); }
-    catch { return []; }
+    try { return { entries: JSON.parse(localStorage.getItem('auralog_v2_entries') || '[]'), fromServer: false }; }
+    catch { return { entries: [], fromServer: false }; }
   }
 };
 
@@ -1188,6 +1188,7 @@ Return ONLY a JSON array of indices (e.g., [2, 5, 0]). Max 5 results. Return [] 
 
 export default function AuraLog() {
   const [entries, setEntries]           = useState([]);
+  const [loaded, setLoaded]             = useState(false);
   const [settings, setSettings]         = useState({ theme: 'dark', encryptEnabled: false, encryptPassword: '' });
   const [view, setView]                 = useState('home');
   const [editingEntry, setEditingEntry] = useState(null);
@@ -1202,15 +1203,22 @@ export default function AuraLog() {
   useEffect(() => {
     const s = loadSettings();
     if (s) setSettings(prev => ({ ...prev, ...s }));
-    apiLoadEntries().then(loaded => setEntries(loaded));
+    // Only start saving once the server's entries are loaded, so a slow or failed
+    // load never overwrites the journal. On failure, show the local copy and retry.
+    const load = () => apiLoadEntries().then(({ entries: list, fromServer }) => {
+      setEntries(list);
+      if (fromServer) setLoaded(true);
+      else setTimeout(load, 3000);
+    });
+    load();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Save — debounced write to server whenever entries change ───────────────
   useEffect(() => {
     if (locked) return;
     saveSettings(settings);
-    apiSaveEntries(entries);
-  }, [entries, settings, locked]);
+    if (loaded) apiSaveEntries(entries);
+  }, [entries, settings, locked, loaded]);
 
   // ── Theme ──────────────────────────────────────────────────────────────────
   useEffect(() => {
